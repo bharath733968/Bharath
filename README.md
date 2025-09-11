@@ -1,4 +1,3 @@
-/*
 AI Trainer - Next.js (app/page.js) starter
 
 This single-file bundle contains:
