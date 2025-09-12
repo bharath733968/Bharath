@@ -11,19 +11,28 @@ export default function AITrainer() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [detector, setDetector] = useState<poseDetection.PoseDetector | null>(null);
   const [repCount, setRepCount] = useState(0);
+  const [setCount, setSetCount] = useState(0);
+  const [currentSetReps, setCurrentSetReps] = useState(0);
   const [calories, setCalories] = useState(0);
   const [isDown, setIsDown] = useState(false);
   const [isPushupDown, setIsPushupDown] = useState(false);
   const [running, setRunning] = useState(false);
   const [exercise, setExercise] = useState<"squat" | "pushup">("squat");
   const [message, setMessage] = useState("Click Start to begin your workout");
+  const [formFeedback, setFormFeedback] = useState("");
   const [loading, setLoading] = useState(true);
   const [cameraReady, setCameraReady] = useState(false);
+  const [isResting, setIsResting] = useState(false);
+  const [restTimer, setRestTimer] = useState(0);
 
   // Countdown state and refs
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
+  const restIntervalRef = useRef<number | null>(null);
   const isUnmountedRef = useRef(false);
+
+  const REPS_PER_SET = 10;
+  const REST_TIME = 30; // seconds
 
   // Speak with optional interrupt flag
   function speak(text: string, interrupt = false) {
@@ -109,6 +118,7 @@ export default function AITrainer() {
     return () => {
       isUnmountedRef.current = true;
       clearCountdown(true);
+      clearRestTimer();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -165,13 +175,52 @@ export default function AITrainer() {
 
         // Initialize workout state and start
         setRepCount(0);
+        setSetCount(0);
+        setCurrentSetReps(0);
         setCalories(0);
         setIsDown(false);
         setIsPushupDown(false);
+        setFormFeedback("");
+        setIsResting(false);
+        setRestTimer(0);
         setRunning(true);
         setMessage(`Performing ${exercise}s - get into position!`);
       }
     }, 1000) as unknown as number; // type cast for TS DOM
+  }
+
+  // Start rest period between sets
+  function startRestPeriod() {
+    setIsResting(true);
+    setRestTimer(REST_TIME);
+    speak(`Great set! Rest for ${REST_TIME} seconds`, true);
+    setMessage(`Set ${setCount} complete! Rest for ${REST_TIME} seconds`);
+    
+    restIntervalRef.current = window.setInterval(() => {
+      setRestTimer((prev) => {
+        if (prev <= 1) {
+          if (restIntervalRef.current) {
+            window.clearInterval(restIntervalRef.current);
+            restIntervalRef.current = null;
+          }
+          setIsResting(false);
+          speak("Rest time over! Ready for next set?", true);
+          setMessage("Rest complete! Ready for your next set");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000) as unknown as number;
+  }
+
+  // Clear rest timer
+  function clearRestTimer() {
+    if (restIntervalRef.current !== null) {
+      window.clearInterval(restIntervalRef.current);
+      restIntervalRef.current = null;
+    }
+    setRestTimer(0);
+    setIsResting(false);
   }
 
   useEffect(() => {
@@ -254,21 +303,53 @@ export default function AITrainer() {
     const hip = keypoints.find((k) => k.name === "left_hip");
     const knee = keypoints.find((k) => k.name === "left_knee");
     const ankle = keypoints.find((k) => k.name === "left_ankle");
+    const rightHip = keypoints.find((k) => k.name === "right_hip");
+    const rightKnee = keypoints.find((k) => k.name === "right_knee");
+    const rightAnkle = keypoints.find((k) => k.name === "right_ankle");
+    
     if (hip && knee && ankle && hip.score! > 0.5 && knee.score! > 0.5 && ankle.score! > 0.5) {
       const kneeAngle = angleBetweenThreePoints(hip, knee, ankle);
+      
+      // Provide real-time form feedback
+      if (kneeAngle > 160) {
+        setFormFeedback("Standing position - Good posture!");
+      } else if (kneeAngle > 120) {
+        setFormFeedback("Going down - Keep your back straight!");
+      } else if (kneeAngle > 90) {
+        setFormFeedback("Almost there - Go a bit lower!");
+      } else if (kneeAngle > 70) {
+        setFormFeedback("Perfect depth! Now push up!");
+      } else {
+        setFormFeedback("Too low - Don't go past 90 degrees!");
+      }
+      
       if (kneeAngle < 90 && !isDown) {
         setIsDown(true);
-        setMessage("Good form! Now stand up!");
+        speak("Good depth! Now push up!", false);
       }
+      
       if (kneeAngle > 160 && isDown) {
-        setRepCount((prev) => {
-          const newCount = prev + 1;
-          const newCalories = calculateCalories("squat", newCount);
-          setCalories(newCalories);
-          speak(`${newCount} reps, ${newCalories} calories`, true);
-          setMessage(`Great squat! ${newCount} reps, ~${newCalories} kcal`);
-          return newCount;
-        });
+        if (!isResting) {
+          setRepCount((prev) => prev + 1);
+          setCurrentSetReps((prev) => {
+            const newSetReps = prev + 1;
+            const totalReps = repCount + 1;
+            const newCalories = calculateCalories("squat", totalReps);
+            setCalories(newCalories);
+            
+            if (newSetReps >= REPS_PER_SET) {
+              setSetCount((prevSets) => prevSets + 1);
+              setCurrentSetReps(0);
+              speak(`Excellent! Set ${setCount + 1} completed!`, true);
+              startRestPeriod();
+            } else {
+              speak(`${newSetReps} reps in this set`, false);
+              setMessage(`Rep ${newSetReps}/${REPS_PER_SET} - Great form!`);
+            }
+            
+            return newSetReps >= REPS_PER_SET ? 0 : newSetReps;
+          });
+        }
         setIsDown(false);
       }
     }
@@ -278,21 +359,51 @@ export default function AITrainer() {
     const shoulder = keypoints.find((k) => k.name === "left_shoulder");
     const elbow = keypoints.find((k) => k.name === "left_elbow");
     const wrist = keypoints.find((k) => k.name === "left_wrist");
+    const hip = keypoints.find((k) => k.name === "left_hip");
+    
     if (shoulder && elbow && wrist && shoulder.score! > 0.5 && elbow.score! > 0.5 && wrist.score! > 0.5) {
       const elbowAngle = angleBetweenThreePoints(shoulder, elbow, wrist);
+      
+      // Provide real-time form feedback
+      if (elbowAngle > 160) {
+        setFormFeedback("Starting position - Keep your body straight!");
+      } else if (elbowAngle > 120) {
+        setFormFeedback("Going down - Control the movement!");
+      } else if (elbowAngle > 90) {
+        setFormFeedback("Good depth - Now push up!");
+      } else if (elbowAngle > 70) {
+        setFormFeedback("Perfect form! Push back up!");
+      } else {
+        setFormFeedback("Too low - Don't touch the ground!");
+      }
+      
       if (elbowAngle < 90 && !isPushupDown) {
         setIsPushupDown(true);
-        setMessage("Good form! Now push up!");
+        speak("Good depth! Now push up!", false);
       }
+      
       if (elbowAngle > 160 && isPushupDown) {
-        setRepCount((prev) => {
-          const newCount = prev + 1;
-          const newCalories = calculateCalories("pushup", newCount);
-          setCalories(newCalories);
-          speak(`${newCount} reps, ${newCalories} calories`, true);
-          setMessage(`Excellent pushup! ${newCount} reps, ~${newCalories} kcal`);
-          return newCount;
-        });
+        if (!isResting) {
+          setRepCount((prev) => prev + 1);
+          setCurrentSetReps((prev) => {
+            const newSetReps = prev + 1;
+            const totalReps = repCount + 1;
+            const newCalories = calculateCalories("pushup", totalReps);
+            setCalories(newCalories);
+            
+            if (newSetReps >= REPS_PER_SET) {
+              setSetCount((prevSets) => prevSets + 1);
+              setCurrentSetReps(0);
+              speak(`Amazing! Set ${setCount + 1} completed!`, true);
+              startRestPeriod();
+            } else {
+              speak(`${newSetReps} reps in this set`, false);
+              setMessage(`Rep ${newSetReps}/${REPS_PER_SET} - Excellent form!`);
+            }
+            
+            return newSetReps >= REPS_PER_SET ? 0 : newSetReps;
+          });
+        }
         setIsPushupDown(false);
       }
     }
@@ -322,19 +433,26 @@ export default function AITrainer() {
       setRunning(false);
       // Also clear any countdown just in case
       clearCountdown(true);
+      clearRestTimer();
       speak("Workout stopped", true);
-      setMessage(`Workout paused at ${repCount} reps`);
+      setMessage(`Workout paused - ${setCount} sets, ${repCount} total reps`);
     }
   }
 
   function handleReset() {
     // Stop workout and countdown
     setRepCount(0);
+    setSetCount(0);
+    setCurrentSetReps(0);
     setCalories(0);
     setIsDown(false);
     setIsPushupDown(false);
     setRunning(false);
+    setFormFeedback("");
+    setIsResting(false);
+    setRestTimer(0);
     clearCountdown(true);
+    clearRestTimer();
     speak("Workout reset", true);
     setMessage("Workout reset. Ready to start fresh!");
   }
@@ -342,11 +460,17 @@ export default function AITrainer() {
   function handleExerciseChange(newExercise: "squat" | "pushup") {
     setExercise(newExercise);
     setRepCount(0);
+    setSetCount(0);
+    setCurrentSetReps(0);
     setCalories(0);
     setIsDown(false);
     setIsPushupDown(false);
     setRunning(false);
+    setFormFeedback("");
+    setIsResting(false);
+    setRestTimer(0);
     clearCountdown(true);
+    clearRestTimer();
     setMessage(`Exercise changed to ${newExercise}s. Click Start when ready!`);
   }
 
@@ -414,28 +538,95 @@ export default function AITrainer() {
 
         {/* Rep Counter + Calories + Countdown */}
         <div className="text-center mb-6">
-          <div className="inline-block bg-gray-800 rounded-2xl px-8 py-6 shadow-lg">
-            <h2 className="text-6xl md:text-7xl font-bold text-green-400 mb-2">{repCount}</h2>
-            <p className="text-xl text-gray-300 capitalize">{exercise}{repCount !== 1 ? "s" : ""} Completed</p>
-            <p className="text-lg text-yellow-400 mt-2">🔥 {calories} kcal burned</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto">
+            {/* Current Set Progress */}
+            <div className="bg-gray-800 rounded-2xl px-6 py-4 shadow-lg">
+              <h3 className="text-2xl font-bold text-blue-400 mb-2">Current Set</h3>
+              <p className="text-4xl font-bold text-white">{currentSetReps}/{REPS_PER_SET}</p>
+              <p className="text-gray-300 text-sm">Reps in this set</p>
+              {isResting && (
+                <div className="mt-2">
+                  <p className="text-yellow-400 font-bold">Rest: {restTimer}s</p>
+                  <div className="w-full bg-gray-700 rounded-full h-2 mt-1">
+                    <div 
+                      className="bg-yellow-400 h-2 rounded-full transition-all duration-1000"
+                      style={{ width: `${((REST_TIME - restTimer) / REST_TIME) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Total Stats */}
+            <div className="bg-gray-800 rounded-2xl px-6 py-4 shadow-lg">
+              <h3 className="text-2xl font-bold text-green-400 mb-2">Total Stats</h3>
+              <p className="text-4xl font-bold text-white">{repCount}</p>
+              <p className="text-gray-300 text-sm capitalize">Total {exercise}{repCount !== 1 ? "s" : ""}</p>
+              <p className="text-yellow-400 mt-1">🔥 {calories} kcal</p>
+            </div>
+
+            {/* Sets Completed */}
+            <div className="bg-gray-800 rounded-2xl px-6 py-4 shadow-lg">
+              <h3 className="text-2xl font-bold text-purple-400 mb-2">Sets Done</h3>
+              <p className="text-4xl font-bold text-white">{setCount}</p>
+              <p className="text-gray-300 text-sm">Completed sets</p>
+              <p className="text-purple-300 text-xs mt-1">{REPS_PER_SET} reps per set</p>
+            </div>
+          </div>
 
             {countdown !== null && (
-              <p className="text-5xl font-bold text-yellow-400 mt-4 animate-pulse">
+              <div className="mt-6">
+                <p className="text-5xl font-bold text-yellow-400 animate-pulse">
                 {countdown === 0 ? "Go!" : countdown}
-              </p>
+                </p>
+              </div>
             )}
-          </div>
         </div>
+
+        {/* Form Feedback */}
+        {formFeedback && running && !isResting && (
+          <div className="text-center mb-4">
+            <div className="inline-block bg-blue-600 rounded-lg px-6 py-3">
+              <p className="text-white font-semibold">💪 {formFeedback}</p>
+            </div>
+          </div>
+        )}
 
         {/* Status */}
         <div className="text-center">
           <div className="inline-flex items-center gap-2 bg-gray-800 rounded-lg px-4 py-3">
             {message.includes("denied") || message.includes("Failed") ? (
               <AlertCircle size={20} className="text-red-400" />
+            ) : isResting ? (
+              <div className="w-3 h-3 rounded-full bg-yellow-400 animate-pulse" />
             ) : (
               <div className={`w-3 h-3 rounded-full ${running ? "bg-green-400 animate-pulse" : "bg-gray-400"}`} />
             )}
             <p className="text-gray-300">{message}</p>
+          </div>
+        </div>
+
+        {/* Workout Tips */}
+        <div className="mt-8 max-w-2xl mx-auto">
+          <div className="bg-gray-800 rounded-lg p-6">
+            <h3 className="text-xl font-bold text-white mb-4">💡 Workout Tips</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-300">
+              {exercise === "squat" ? (
+                <>
+                  <div>• Keep your back straight</div>
+                  <div>• Go down to 90° knee angle</div>
+                  <div>• Push through your heels</div>
+                  <div>• Keep knees aligned with toes</div>
+                </>
+              ) : (
+                <>
+                  <div>• Keep your body in a straight line</div>
+                  <div>• Lower until 90° elbow angle</div>
+                  <div>• Push up with control</div>
+                  <div>• Engage your core throughout</div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
