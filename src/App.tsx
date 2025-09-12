@@ -147,10 +147,9 @@ export default function AITrainer() {
     let counter = 3;
     setCountdown(counter);
 
-    // cancel any queued speech so the countdown will start cleanly
-    speak(`Get ready for ${exercise} workout`, true);
+    // Cancel any queued speech and announce workout start
+    speak(`Get ready for ${exercise} workout. Starting in 3, 2, 1`, true);
 
-    // Speak numbers without interrupting each other so they queue naturally
     countdownIntervalRef.current = window.setInterval(() => {
       // If component unmounted, stop
       if (isUnmountedRef.current) {
@@ -159,8 +158,8 @@ export default function AITrainer() {
       }
 
       if (counter > 0) {
-        // Queue the spoken number (do not interrupt previous number so speech flows)
-        speak(String(counter), false);
+        // Speak countdown number with emphasis
+        speak(String(counter), true);
         setCountdown(counter);
         counter -= 1;
       } else {
@@ -170,8 +169,8 @@ export default function AITrainer() {
           countdownIntervalRef.current = null;
         }
         setCountdown(null);
-        // Allow "Go!" to be spoken immediately after the last number
-        speak("Go!", false);
+        // Enthusiastic start command
+        speak("Go! Let's do this!", true);
 
         // Initialize workout state and start
         setRepCount(0);
@@ -193,7 +192,7 @@ export default function AITrainer() {
   function startRestPeriod() {
     setIsResting(true);
     setRestTimer(REST_TIME);
-    speak(`Great set! Rest for ${REST_TIME} seconds`, true);
+    speak(`Excellent set completed! Take a ${REST_TIME} second rest. I'll count you down.`, true);
     setMessage(`Set ${setCount} complete! Rest for ${REST_TIME} seconds`);
     
     restIntervalRef.current = window.setInterval(() => {
@@ -204,9 +203,16 @@ export default function AITrainer() {
             restIntervalRef.current = null;
           }
           setIsResting(false);
-          speak("Rest time over! Ready for next set?", true);
+          speak("Rest time is over! Get ready for your next set. You've got this!", true);
           setMessage("Rest complete! Ready for your next set");
           return 0;
+        } else if (prev <= 5) {
+          // Voice countdown for last 5 seconds of rest
+          speak(String(prev), true);
+        } else if (prev === 15) {
+          speak("15 seconds remaining in your rest period", false);
+        } else if (prev === 10) {
+          speak("10 seconds left. Get ready!", false);
         }
         return prev - 1;
       });
@@ -325,7 +331,7 @@ export default function AITrainer() {
       
       if (kneeAngle < 90 && !isDown) {
         setIsDown(true);
-        speak("Good depth! Now push up!", false);
+        speak("Perfect squat depth! Now drive up through your heels!", false);
       }
       
       if (kneeAngle > 160 && isDown) {
@@ -340,10 +346,10 @@ export default function AITrainer() {
             if (newSetReps >= REPS_PER_SET) {
               setSetCount((prevSets) => prevSets + 1);
               setCurrentSetReps(0);
-              speak(`Excellent! Set ${setCount + 1} completed!`, true);
+              speak(`Outstanding! Set ${setCount + 1} completed with perfect form!`, true);
               startRestPeriod();
             } else {
-              speak(`${newSetReps} reps in this set`, false);
+              speak(`${newSetReps} down, ${REPS_PER_SET - newSetReps} to go! Keep it up!`, false);
               setMessage(`Rep ${newSetReps}/${REPS_PER_SET} - Great form!`);
             }
             
@@ -379,7 +385,7 @@ export default function AITrainer() {
       
       if (elbowAngle < 90 && !isPushupDown) {
         setIsPushupDown(true);
-        speak("Good depth! Now push up!", false);
+        speak("Perfect push-up depth! Now push up strong!", false);
       }
       
       if (elbowAngle > 160 && isPushupDown) {
@@ -394,10 +400,10 @@ export default function AITrainer() {
             if (newSetReps >= REPS_PER_SET) {
               setSetCount((prevSets) => prevSets + 1);
               setCurrentSetReps(0);
-              speak(`Amazing! Set ${setCount + 1} completed!`, true);
+              speak(`Incredible! Set ${setCount + 1} completed with excellent form!`, true);
               startRestPeriod();
             } else {
-              speak(`${newSetReps} reps in this set`, false);
+              speak(`${newSetReps} reps done, ${REPS_PER_SET - newSetReps} more to go! You're crushing it!`, false);
               setMessage(`Rep ${newSetReps}/${REPS_PER_SET} - Excellent form!`);
             }
             
@@ -453,7 +459,7 @@ export default function AITrainer() {
     setRestTimer(0);
     clearCountdown(true);
     clearRestTimer();
-    speak("Workout reset", true);
+    speak("Workout has been reset. Ready to start fresh when you are!", true);
     setMessage("Workout reset. Ready to start fresh!");
   }
 
@@ -471,6 +477,7 @@ export default function AITrainer() {
     setRestTimer(0);
     clearCountdown(true);
     clearRestTimer();
+    speak(`Exercise changed to ${newExercise}s. Click start when you're ready to begin!`, true);
     setMessage(`Exercise changed to ${newExercise}s. Click Start when ready!`);
   }
 
