@@ -58,7 +58,11 @@ export default function AITrainer() {
     try {
       setMessage("Requesting camera access...");
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        video: { 
+          width: { ideal: 640 }, 
+          height: { ideal: 480 }, 
+          facingMode: "user" 
+        },
         audio: false,
       });
 
@@ -67,9 +71,15 @@ export default function AITrainer() {
         return new Promise((resolve) => {
           if (videoRef.current) {
             videoRef.current.onloadedmetadata = () => {
+              videoRef.current?.play().catch(console.error);
               setCameraReady(true);
               setMessage("Camera ready! Select an exercise and start your workout");
               resolve(true);
+            };
+            videoRef.current.onerror = () => {
+              console.error("Video error");
+              setMessage("Camera error. Please refresh and try again.");
+              resolve(false);
             };
           }
         });
@@ -77,7 +87,13 @@ export default function AITrainer() {
       return false;
     } catch (error) {
       console.error("Camera setup error:", error);
-      setMessage("Camera access denied. Please allow camera permissions and refresh the page.");
+      if (error instanceof Error && error.name === 'NotAllowedError') {
+        setMessage("Camera access denied. Please allow camera permissions and refresh the page.");
+      } else if (error instanceof Error && error.name === 'NotFoundError') {
+        setMessage("No camera found. Please connect a camera and refresh the page.");
+      } else {
+        setMessage("Camera setup failed. Please refresh the page and try again.");
+      }
       return false;
     }
   }
@@ -141,39 +157,33 @@ export default function AITrainer() {
 
   // Start a 3-second countdown, robust and safe
   function startCountdown() {
-    // Prevent multiple countdowns
-    if (countdownIntervalRef.current !== null) return;
+    // Clear any existing countdown first
+    clearCountdown(false);
 
     let counter = 3;
     setCountdown(counter);
+    setMessage(`Get ready for ${exercise} workout!`);
 
-    // cancel any queued speech so the countdown will start cleanly
-    speak(`Get ready for ${exercise} workout`, true);
+    // Speak the initial message
+    speak(`Get ready for ${exercise}s`, true);
 
-    // Speak numbers without interrupting each other so they queue naturally
     countdownIntervalRef.current = window.setInterval(() => {
-      // If component unmounted, stop
       if (isUnmountedRef.current) {
         clearCountdown(true);
         return;
       }
 
       if (counter > 0) {
-        // Queue the spoken number (do not interrupt previous number so speech flows)
-        speak(String(counter), false);
         setCountdown(counter);
+        speak(String(counter), true);
         counter -= 1;
       } else {
-        // Final step: clear interval and start workout
-        if (countdownIntervalRef.current !== null) {
-          window.clearInterval(countdownIntervalRef.current);
-          countdownIntervalRef.current = null;
-        }
+        // Clear countdown and start workout
+        clearCountdown(false);
         setCountdown(null);
-        // Allow "Go!" to be spoken immediately after the last number
-        speak("Go!", false);
+        speak("Go!", true);
 
-        // Initialize workout state and start
+        // Reset workout state and start
         setRepCount(0);
         setSetCount(0);
         setCurrentSetReps(0);
@@ -473,32 +483,41 @@ export default function AITrainer() {
   }
 
   async function handleStart() {
-    // Ensure camera is ready before starting countdown or running
-    if (!running && !cameraReady) {
-      const success = await setupCamera();
-      if (!success) return;
-    }
-
-    // If currently not running, start countdown (or cancel if countdown already active)
-    if (!running) {
-      if (countdownIntervalRef.current !== null) {
-        // Cancel active countdown
+    try {
+      // If workout is currently running, stop it
+      if (running) {
+        setRunning(false);
         clearCountdown(true);
-        speak("Countdown cancelled", true);
-        setMessage("Countdown cancelled");
+        clearRestTimer();
+        speak("Workout stopped", true);
+        setMessage(`Workout paused - ${setCount} sets, ${repCount} total reps`);
         return;
       }
 
-      // Start the countdown that will set `running` to true when finished
+      // If countdown is active, cancel it
+      if (countdownIntervalRef.current !== null) {
+        clearCountdown(true);
+        speak("Countdown cancelled", true);
+        setMessage("Countdown cancelled. Click Start to try again.");
+        return;
+      }
+
+      // Ensure camera is ready before starting
+      if (!cameraReady) {
+        setMessage("Setting up camera...");
+        const success = await setupCamera();
+        if (!success) {
+          setMessage("Camera setup failed. Please check permissions and try again.");
+          return;
+        }
+      }
+
+      // Start the countdown
+      setMessage("Starting workout countdown...");
       startCountdown();
-    } else {
-      // If workout is running, stop it
-      setRunning(false);
-      // Also clear any countdown just in case
-      clearCountdown(true);
-      clearRestTimer();
-      speak("Workout stopped", true);
-      setMessage(`Workout paused - ${setCount} sets, ${repCount} total reps`);
+    } catch (error) {
+      console.error("Error starting workout:", error);
+      setMessage("Error starting workout. Please try again.");
     }
   }
 
@@ -569,12 +588,25 @@ export default function AITrainer() {
 
           <button
             onClick={handleStart}
+            disabled={loading}
             className={`flex items-center gap-2 px-6 py-2 rounded-lg font-semibold transition-all duration-200 ${
-              running ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"
-            }`}
+              loading 
+                ? "bg-gray-600 cursor-not-allowed" 
+                : running 
+                  ? "bg-red-600 hover:bg-red-700" 
+                  : countdown !== null
+                    ? "bg-yellow-600 hover:bg-yellow-700"
+                    : "bg-green-600 hover:bg-green-700"
+            } ${loading ? "opacity-50" : ""}`}
           >
             {running ? <Square size={20} /> : <Play size={20} />}
-            {running ? "Stop Workout" : "Start Workout"}
+            {loading 
+              ? "Loading..." 
+              : running 
+                ? "Stop Workout" 
+                : countdown !== null
+                  ? "Cancel Countdown"
+                  : "Start Workout"}
           </button>
 
           <button
