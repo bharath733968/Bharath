@@ -142,14 +142,20 @@ export default function AITrainer() {
   // Clear countdown helper (safe to call multiple times)
   function clearCountdown(cancelSpeech = true) {
     if (countdownIntervalRef.current !== null) {
-      window.clearInterval(countdownIntervalRef.current);
+      // Clear both interval and timeout
+      try {
+        window.clearInterval(countdownIntervalRef.current);
+        window.clearTimeout(countdownIntervalRef.current);
+      } catch (e) {
+        // Ignore errors
+      }
       countdownIntervalRef.current = null;
     }
     if (cancelSpeech && typeof window !== "undefined" && window.speechSynthesis) {
       try {
         window.speechSynthesis.cancel();
       } catch (e) {
-        // ignore
+        // Ignore speech errors
       }
     }
     setCountdown(null);
@@ -157,31 +163,65 @@ export default function AITrainer() {
 
   // Start a 3-second countdown, robust and safe
   function startCountdown() {
-    // Clear any existing countdown first
-    clearCountdown(false);
+    // Prevent multiple countdowns and clear any existing ones
+    if (countdownIntervalRef.current !== null) {
+      clearCountdown(true);
+      return;
+    }
 
     let counter = 3;
     setCountdown(counter);
-    setMessage(`Get ready for ${exercise} workout!`);
+    setMessage(`Starting ${exercise} workout in ${counter}...`);
 
-    // Speak the initial message
-    speak(`Get ready for ${exercise}s`, true);
+    // Speak the initial message without interrupting
+    speak(`Starting ${exercise} workout`, true);
 
-    countdownIntervalRef.current = window.setInterval(() => {
+    // Use setTimeout chain instead of setInterval for more reliable countdown
+    const runCountdown = (count: number) => {
       if (isUnmountedRef.current) {
         clearCountdown(true);
         return;
       }
 
-      if (counter > 0) {
-        setCountdown(counter);
-        speak(String(counter), true);
-        counter -= 1;
+      if (count > 0) {
+        setCountdown(count);
+        setMessage(`Starting ${exercise} workout in ${count}...`);
+        speak(String(count), false);
+        
+        // Schedule next countdown step
+        countdownIntervalRef.current = window.setTimeout(() => {
+          runCountdown(count - 1);
+        }, 1000) as unknown as number;
       } else {
-        // Clear countdown and start workout
-        clearCountdown(false);
+        // Countdown finished - start workout
         setCountdown(null);
-        speak("Go!", true);
+        countdownIntervalRef.current = null;
+        
+        // Start workout immediately
+        speak("Go! Start your workout!", true);
+        startWorkout();
+      }
+    };
+
+    // Start the countdown
+    runCountdown(counter);
+  }
+
+  // Separate function to start the actual workout
+  function startWorkout() {
+    // Reset workout state
+    setRepCount(0);
+    setSetCount(0);
+    setCurrentSetReps(0);
+    setCalories(0);
+    setIsDown(false);
+    setIsPushupDown(false);
+    setFormFeedback("");
+    setIsResting(false);
+    setRestTimer(0);
+    setRunning(true);
+    setMessage(`Performing ${exercise}s - get into position!`);
+  }
 
         // Reset workout state and start
         setRepCount(0);
@@ -238,7 +278,7 @@ export default function AITrainer() {
 
     let rafId: number;
     let lastPoseTime = 0;
-    const poseInterval = 150; // ms - increased for better performance
+    const poseInterval = 100; // ms - faster detection for better responsiveness
 
     async function detectPose() {
       if (!videoRef.current || videoRef.current.readyState < 2) {
@@ -251,9 +291,14 @@ export default function AITrainer() {
         try {
           const poses = await detector.estimatePoses(videoRef.current as HTMLVideoElement, { 
             maxPoses: 1, 
-            flipHorizontal: true // Mirror the video for better user experience
+            flipHorizontal: false // Don't flip for more accurate detection
           });
           if (poses.length > 0) {
+            // Analyze pose quality before processing
+            const poseQuality = analyzePoseQuality(poses[0].keypoints);
+            if (poseQuality.isGoodPose) {
+              handleExercise(poses[0].keypoints);
+            }
             handleExercise(poses[0].keypoints);
             drawPose(poses[0].keypoints);
           }
@@ -271,7 +316,6 @@ export default function AITrainer() {
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [detector, running, exercise, cameraReady, isDown, isPushupDown, repCount, setCount, currentSetReps, isResting]);
 
   function drawPose(keypoints: poseDetection.Keypoint[]) {
     if (!canvasRef.current || !videoRef.current) return;
@@ -283,22 +327,44 @@ export default function AITrainer() {
     canvas.height = videoRef.current.videoHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw keypoints with different colors based on confidence
+    // Analyze current pose quality
+    const poseQuality = analyzePoseQuality(keypoints);
+    
+    // Draw pose quality indicator
+    ctx.fillStyle = poseQuality.isGoodPose ? "#00ff00" : "#ff6600";
+    ctx.font = "16px Arial";
+    ctx.fillText(poseQuality.qualityMessage, 10, 30);
+    ctx.fillText(`Confidence: ${(poseQuality.averageConfidence * 100).toFixed(0)}%`, 10, 50);
+
+    // Draw keypoints with enhanced visualization
     keypoints.forEach((kp) => {
-      if (kp.score && kp.score > 0.2) {
+      if (kp.score && kp.score > 0.1) {
         ctx.beginPath();
         
-        // Color based on confidence
+        // Enhanced color coding based on confidence and importance
+        const isImportant = exercise === "squat" 
+          ? ['left_hip', 'left_knee', 'left_ankle', 'right_hip', 'right_knee', 'right_ankle'].includes(kp.name || '')
+          : ['left_shoulder', 'left_elbow', 'left_wrist', 'right_shoulder', 'right_elbow', 'right_wrist'].includes(kp.name || '');
+        
         if (kp.score > 0.7) {
-          ctx.fillStyle = "#00ff00"; // Green for high confidence
+          ctx.fillStyle = isImportant ? "#00ff00" : "#90EE90"; // Bright green for important, light green for others
         } else if (kp.score > 0.4) {
-          ctx.fillStyle = "#ffff00"; // Yellow for medium confidence
+          ctx.fillStyle = isImportant ? "#ffff00" : "#FFFFE0"; // Yellow for important, light yellow for others
         } else {
-          ctx.fillStyle = "#ff8800"; // Orange for low confidence
+          ctx.fillStyle = isImportant ? "#ff6600" : "#FFA500"; // Orange for important, light orange for others
         }
         
-        ctx.arc(kp.x, kp.y, 4, 0, 2 * Math.PI);
+        // Larger circles for important points
+        const radius = isImportant ? 6 : 3;
+        ctx.arc(kp.x, kp.y, radius, 0, 2 * Math.PI);
         ctx.fill();
+        
+        // Add point labels for debugging
+        if (kp.score > 0.5) {
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "10px Arial";
+          ctx.fillText(kp.name?.split('_')[1] || '', kp.x + 8, kp.y - 8);
+        }
       }
     });
 
@@ -351,7 +417,7 @@ export default function AITrainer() {
   }
 
   function handleSquatDetection(keypoints: poseDetection.Keypoint[]) {
-    // Use both sides for better detection
+    // Get all relevant keypoints
     const leftHip = keypoints.find((k) => k.name === "left_hip");
     const leftKnee = keypoints.find((k) => k.name === "left_knee");
     const leftAnkle = keypoints.find((k) => k.name === "left_ankle");
@@ -359,38 +425,55 @@ export default function AITrainer() {
     const rightKnee = keypoints.find((k) => k.name === "right_knee");
     const rightAnkle = keypoints.find((k) => k.name === "right_ankle");
     
-    // Check if we have good detection on at least one side
-    let kneeAngle = 180; // Default to standing position
+    // Calculate angles for both sides and use the better one
+    let leftKneeAngle = 180;
+    let rightKneeAngle = 180;
+    let bestAngle = 180;
+    let hasGoodDetection = false;
     
+    // Check left side
     if (leftHip && leftKnee && leftAnkle && 
-        leftHip.score! > 0.3 && leftKnee.score! > 0.3 && leftAnkle.score! > 0.3) {
-      kneeAngle = angleBetweenThreePoints(leftHip, leftKnee, leftAnkle);
-    } else if (rightHip && rightKnee && rightAnkle && 
-               rightHip.score! > 0.3 && rightKnee.score! > 0.3 && rightAnkle.score! > 0.3) {
-      kneeAngle = angleBetweenThreePoints(rightHip, rightKnee, rightAnkle);
-    } else {
-      return; // No good detection, skip this frame
+        leftHip.score! > 0.25 && leftKnee.score! > 0.25 && leftAnkle.score! > 0.25) {
+      leftKneeAngle = angleBetweenThreePoints(leftHip, leftKnee, leftAnkle);
+      hasGoodDetection = true;
     }
+    
+    // Check right side
+    if (rightHip && rightKnee && rightAnkle && 
+        rightHip.score! > 0.25 && rightKnee.score! > 0.25 && rightAnkle.score! > 0.25) {
+      rightKneeAngle = angleBetweenThreePoints(rightHip, rightKnee, rightAnkle);
+      hasGoodDetection = true;
+    }
+    
+    if (!hasGoodDetection) {
+      setFormFeedback("Position yourself so I can see your legs clearly");
+      return;
+    }
+    
+    // Use the more bent angle (lower value) as it's more reliable for squat detection
+    bestAngle = Math.min(leftKneeAngle, rightKneeAngle);
       
     // Provide real-time form feedback
-    if (kneeAngle > 160) {
+    if (bestAngle > 160) {
       setFormFeedback("Standing position - Good posture!");
-    } else if (kneeAngle > 120) {
+    } else if (bestAngle > 120) {
       setFormFeedback("Going down - Keep your back straight!");
-    } else if (kneeAngle > 90) {
+    } else if (bestAngle > 90) {
       setFormFeedback("Almost there - Go a bit lower!");
-    } else if (kneeAngle > 70) {
+    } else if (bestAngle > 70) {
       setFormFeedback("Perfect depth! Now push up!");
     } else {
       setFormFeedback("Too low - Don't go past 90 degrees!");
     }
       
-    if (kneeAngle < 90 && !isDown) {
+    // Detect squat down position
+    if (bestAngle < 95 && !isDown) {
       setIsDown(true);
       speak("Good depth! Now push up!", false);
     }
       
-    if (kneeAngle > 160 && isDown) {
+    // Detect squat up position (rep completed)
+    if (bestAngle > 155 && isDown) {
       if (!isResting) {
         setRepCount((prev) => prev + 1);
         setCurrentSetReps((prev) => {
@@ -417,7 +500,7 @@ export default function AITrainer() {
   }
 
   function handlePushupDetection(keypoints: poseDetection.Keypoint[]) {
-    // Use both sides for better detection
+    // Get all relevant keypoints
     const leftShoulder = keypoints.find((k) => k.name === "left_shoulder");
     const leftElbow = keypoints.find((k) => k.name === "left_elbow");
     const leftWrist = keypoints.find((k) => k.name === "left_wrist");
@@ -425,38 +508,55 @@ export default function AITrainer() {
     const rightElbow = keypoints.find((k) => k.name === "right_elbow");
     const rightWrist = keypoints.find((k) => k.name === "right_wrist");
     
-    // Check if we have good detection on at least one side
-    let elbowAngle = 180; // Default to up position
+    // Calculate angles for both sides
+    let leftElbowAngle = 180;
+    let rightElbowAngle = 180;
+    let bestAngle = 180;
+    let hasGoodDetection = false;
     
+    // Check left side
     if (leftShoulder && leftElbow && leftWrist && 
-        leftShoulder.score! > 0.3 && leftElbow.score! > 0.3 && leftWrist.score! > 0.3) {
-      elbowAngle = angleBetweenThreePoints(leftShoulder, leftElbow, leftWrist);
-    } else if (rightShoulder && rightElbow && rightWrist && 
-               rightShoulder.score! > 0.3 && rightElbow.score! > 0.3 && rightWrist.score! > 0.3) {
-      elbowAngle = angleBetweenThreePoints(rightShoulder, rightElbow, rightWrist);
-    } else {
-      return; // No good detection, skip this frame
+        leftShoulder.score! > 0.25 && leftElbow.score! > 0.25 && leftWrist.score! > 0.25) {
+      leftElbowAngle = angleBetweenThreePoints(leftShoulder, leftElbow, leftWrist);
+      hasGoodDetection = true;
     }
+    
+    // Check right side
+    if (rightShoulder && rightElbow && rightWrist && 
+        rightShoulder.score! > 0.25 && rightElbow.score! > 0.25 && rightWrist.score! > 0.25) {
+      rightElbowAngle = angleBetweenThreePoints(rightShoulder, rightElbow, rightWrist);
+      hasGoodDetection = true;
+    }
+    
+    if (!hasGoodDetection) {
+      setFormFeedback("Position yourself so I can see your arms clearly");
+      return;
+    }
+    
+    // Use the more bent angle (lower value) for pushup detection
+    bestAngle = Math.min(leftElbowAngle, rightElbowAngle);
       
     // Provide real-time form feedback
-    if (elbowAngle > 160) {
+    if (bestAngle > 160) {
       setFormFeedback("Starting position - Keep your body straight!");
-    } else if (elbowAngle > 120) {
+    } else if (bestAngle > 120) {
       setFormFeedback("Going down - Control the movement!");
-    } else if (elbowAngle > 90) {
+    } else if (bestAngle > 90) {
       setFormFeedback("Good depth - Now push up!");
-    } else if (elbowAngle > 70) {
+    } else if (bestAngle > 70) {
       setFormFeedback("Perfect form! Push back up!");
     } else {
       setFormFeedback("Too low - Don't touch the ground!");
     }
       
-    if (elbowAngle < 90 && !isPushupDown) {
+    // Detect pushup down position
+    if (bestAngle < 95 && !isPushupDown) {
       setIsPushupDown(true);
       speak("Good depth! Now push up!", false);
     }
       
-    if (elbowAngle > 160 && isPushupDown) {
+    // Detect pushup up position (rep completed)
+    if (bestAngle > 155 && isPushupDown) {
       if (!isResting) {
         setRepCount((prev) => prev + 1);
         setCurrentSetReps((prev) => {
@@ -510,14 +610,20 @@ export default function AITrainer() {
           setMessage("Camera setup failed. Please check permissions and try again.");
           return;
         }
+        // Wait a moment for camera to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
 
       // Start the countdown
-      setMessage("Starting workout countdown...");
+      setMessage("Get ready! Starting countdown...");
       startCountdown();
     } catch (error) {
       console.error("Error starting workout:", error);
-      setMessage("Error starting workout. Please try again.");
+      setMessage("Error starting workout. Please refresh and try again.");
+      // Reset states on error
+      setRunning(false);
+      clearCountdown(true);
+      clearRestTimer();
     }
   }
 
